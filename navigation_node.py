@@ -1,11 +1,62 @@
 #!/usr/bin/python
 
-import rospy, sys
 import math
-from nav_msgs.srv import GetMap
-from nav_msgs.msg import OccupancyGrid
+import sys
+
 import numpy as np
+import rospy
+from nav_msgs.srv import GetMap
+
 import a_star as a
+
+
+def main():
+    global response, e
+    rospy.init_node("navigation_node", argv=sys.argv)
+
+    starting_location, goal_location, robot_size = get_params()
+
+    try:
+        get_static_map = rospy.ServiceProxy('static_map', GetMap)
+        response = get_static_map()
+        rospy.loginfo("Received a %d X %d map @ %.3f m/px" % (
+            response.map.info.width, response.map.info.height, response.map.info.resolution))
+        # Create new grid by robot size
+        create_occupancy_grid(response.map, robot_size)
+        # Convert start and goal point to be with perspective to new grid map
+        converted_start_point = convert_old_grid_point(robot_size, starting_location)
+        converted_goal_point = convert_old_grid_point(robot_size, goal_location)
+        # Flip grid
+        fliped_grid = np.flipud(grid)
+        # Check if goal point is on obstacle, and update it if necessary
+        converted_goal_point = validate_goal_location(converted_goal_point, fliped_grid)
+        # Use the A_start algorithm - it's require the given map to be flip and as numpy array
+        test_planner = a.PathPlanner(np.array(fliped_grid), False)
+        # Run the algorithm.
+        t, r_path, r_symbols = test_planner.a_star(np.array(converted_start_point), np.array(converted_goal_point))
+        # Write the grid to 'new_grid' file
+        print_map_to_file()
+        # Write the path to 'path' file
+        # print_path_to_file(converted_start_point, converted_goal_point, r_path, r_symbols)
+        print_path_string_to_file(converted_start_point, converted_goal_point, r_path)
+    except rospy.ServiceException, e:
+        rospy.logerr("Service call failed: %s" % e)
+
+
+def get_params():
+    starting_location = 0, 0
+    goal_location = -80, -30
+    robot_size = 0.35
+
+    if rospy.has_param('/starting_location'):
+        starting_location = tuple(map(float, rospy.get_param('/starting_location').split(',')))
+    if rospy.has_param('/goal_location'):
+        goal_location = tuple(map(float, rospy.get_param('/goal_location').split(',')))
+    if rospy.has_param('/robot_size'):
+        robot_size = rospy.get_param('/robot_size')
+    rospy.wait_for_service('static_map')
+
+    return starting_location, goal_location, robot_size
 
 
 def print_map_to_file():
@@ -98,7 +149,7 @@ def convert_old_grid_point(size, point):
     return [new_point_x, new_point_y]
 
 
-def create_grid_by_robot_size(my_map, size):
+def create_occupancy_grid(my_map, robot_size):
     """
     Creates new grid with perspective to new robot size
     :param my_map: map to use it's info
@@ -106,23 +157,26 @@ def create_grid_by_robot_size(my_map, size):
     :return: null
     """
     global grid
-    # Calc how much cells the robot needs
-    new_resolution = int(math.ceil(size / my_map.info.resolution))
-    # Calc new width and height with perspective to new resolution
-    new_width = int(math.floor(my_map.info.width / new_resolution))
-    new_height = int(math.floor(my_map.info.height / new_resolution))
-    grid = [[None] * new_width for i in xrange(new_height)]
+
+    # cells for robot
+    cell = int(math.ceil(robot_size / my_map.info.resolution))
+
+    width = int(math.floor(my_map.info.width / cell))
+    height = int(math.floor(my_map.info.height / cell))
+
+    # build grid
+    grid = [[None] * width for _ in xrange(height)]
 
     i_old_size = 0
     j_old_size = 0
-    for i in xrange(new_height):
-        for j in xrange(new_width):
+    for i in xrange(height):
+        for j in xrange(width):
             # Mark by default that there is not obstacle
             found_obs = False
-            for x in range(i_old_size, i_old_size + new_resolution):
+            for x in range(i_old_size, i_old_size + cell):
                 if found_obs:
                     break
-                for y in range(j_old_size, j_old_size + new_resolution):
+                for y in range(j_old_size, j_old_size + cell):
                     # Check if there is obstacle
                     if my_map.data[x * my_map.info.width + y] != 0:
                         grid[i][j] = True
@@ -132,9 +186,9 @@ def create_grid_by_robot_size(my_map, size):
             # Check if there wasn't any obstacle and mark this cell to False
             if not found_obs:
                 grid[i][j] = False
-            j_old_size += new_resolution
+            j_old_size += cell
         j_old_size = 0
-        i_old_size += new_resolution
+        i_old_size += cell
 
 
 def find_closest_empty_place_vertical(start_point, g, direction):
@@ -213,43 +267,4 @@ def validate_goal_location(g_location, g):
 
 
 if __name__ == "__main__":
-    rospy.init_node("navigation_node", argv=sys.argv)
-    # Default parameters
-    starting_location = 0, 0
-    goal_location = -80, -30
-    robot_size = 0.35
-    # Get parameter from launch file
-    if rospy.has_param('/starting_location'):
-        starting_location = tuple(map(float, rospy.get_param('/starting_location').split(',')))
-    if rospy.has_param('/goal_location'):
-        goal_location = tuple(map(float, rospy.get_param('/goal_location').split(',')))
-    if rospy.has_param('/robot_size'):
-        robot_size = rospy.get_param('/robot_size')
-
-    rospy.wait_for_service('static_map')
-    try:
-        get_static_map = rospy.ServiceProxy('static_map', GetMap)
-        response = get_static_map()
-        rospy.loginfo("Received a %d X %d map @ %.3f m/px" % (
-            response.map.info.width, response.map.info.height, response.map.info.resolution))
-        # creat_occupancy_grid(response.map)
-        # Create new grid by robot size
-        create_grid_by_robot_size(response.map, robot_size)
-        # Convert start and goal point to be with perspective to new grid map
-        converted_start_point = convert_old_grid_point(robot_size, starting_location)
-        converted_goal_point = convert_old_grid_point(robot_size, goal_location)
-        # Flip grid
-        fliped_grid = np.flipud(grid)
-        # Check if goal point is on obstacle, and update it if necessary
-        converted_goal_point = validate_goal_location(converted_goal_point, fliped_grid)
-        # Use the A_start algorithm - it's require the given map to be flip and as numpy array
-        test_planner = a.PathPlanner(np.array(fliped_grid), False)
-        # Run the algorithm.
-        t, r_path, r_symbols = test_planner.a_star(np.array(converted_start_point), np.array(converted_goal_point))
-        # Write the grid to 'new_grid' file
-        print_map_to_file()
-        # Write the path to 'path' file
-        # print_path_to_file(converted_start_point, converted_goal_point, r_path, r_symbols)
-        print_path_string_to_file(converted_start_point, converted_goal_point, r_path)
-    except rospy.ServiceException, e:
-        rospy.logerr("Service call failed: %s" % e)
+    main()
