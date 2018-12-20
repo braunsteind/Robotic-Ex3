@@ -29,14 +29,11 @@ def main():
         # use flipud for A*
         flipud_grid = np.flipud(grid)
         # active A* algorithm
-        t, r_path, r_symbols = a_star.PathPlanner(np.array(flipud_grid), False).a_star(np.array(starting_location),
-                                                                                       np.array(goal_location))
+        init, path, symbols = a_star.PathPlanner(np.array(flipud_grid), False).a_star(np.array(starting_location),
+                                                                                      np.array(goal_location))
 
-        # TODO
-        # Write the grid to 'new_grid' file
         print_map_to_file(grid)
-        # Write the path to 'path' file
-        print_path_string_to_file(starting_location, goal_location, r_path)
+        print_path_to_file(starting_location, goal_location, path)
 
     except rospy.ServiceException, e:
         rospy.logerr("Service call failed: %s" % e)
@@ -60,22 +57,13 @@ def get_params():
 
 def print_map_to_file(grid):
     with open("new_grid.txt", "w+") as grid_file:
-        # Use converted_grid
         for row in reversed(grid):
             for cell in row:
                 grid_file.write("1") if cell else grid_file.write("0")
             grid_file.write("\n")
 
 
-def print_path_string_to_file(start_point, goal_point, path):
-    """
-    Created path file.
-    :param start_point: starting point, marked as 'S'.
-    :param goal_point: goal point, marked as 'G'.
-    :param path: correct path.
-    :return: null
-    """
-    # Write to file
+def print_path_to_file(start_point, goal_point, path):
     with open("path.txt", "w+") as grid_file:
         grid_file.write("Start point: " + " ".join(str(x) for x in start_point) + "\n")
         for line in path:
