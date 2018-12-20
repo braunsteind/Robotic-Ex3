@@ -7,11 +7,10 @@ import numpy as np
 import rospy
 from nav_msgs.srv import GetMap
 
-import a_star as a
+import a_star
 
 
 def main():
-    global response, e
     rospy.init_node("navigation_node", argv=sys.argv)
 
     starting_location, goal_location, robot_size = get_params()
@@ -21,24 +20,24 @@ def main():
         response = get_static_map()
         rospy.loginfo("Received a %d X %d map @ %.3f m/px" % (
             response.map.info.width, response.map.info.height, response.map.info.resolution))
-        # Create new grid by robot size
-        create_occupancy_grid(response.map, robot_size)
-        # Convert start and goal point to be with perspective to new grid map
-        converted_start_point = convert_old_grid_point(robot_size, starting_location)
-        converted_goal_point = convert_old_grid_point(robot_size, goal_location)
-        # Flip grid
-        fliped_grid = np.flipud(grid)
-        # Check if goal point is on obstacle, and update it if necessary
-        converted_goal_point = validate_goal_location(converted_goal_point, fliped_grid)
-        # Use the A_start algorithm - it's require the given map to be flip and as numpy array
-        test_planner = a.PathPlanner(np.array(fliped_grid), False)
-        # Run the algorithm.
-        t, r_path, r_symbols = test_planner.a_star(np.array(converted_start_point), np.array(converted_goal_point))
+
+        # Create new grid by robot size and update the starting and goal location
+        grid = create_occupancy_grid(response.map, robot_size)
+        starting_location = update_grid_location(response, robot_size, starting_location)
+        goal_location = update_grid_location(response, robot_size, goal_location)
+
+        # use flipud for A*
+        flipud_grid = np.flipud(grid)
+        # active A* algorithm
+        t, r_path, r_symbols = a_star.PathPlanner(np.array(flipud_grid), False).a_star(np.array(starting_location),
+                                                                                       np.array(goal_location))
+
+        # TODO
         # Write the grid to 'new_grid' file
-        print_map_to_file()
+        print_map_to_file(grid)
         # Write the path to 'path' file
-        # print_path_to_file(converted_start_point, converted_goal_point, r_path, r_symbols)
-        print_path_string_to_file(converted_start_point, converted_goal_point, r_path)
+        print_path_string_to_file(starting_location, goal_location, r_path)
+
     except rospy.ServiceException, e:
         rospy.logerr("Service call failed: %s" % e)
 
@@ -59,10 +58,9 @@ def get_params():
     return starting_location, goal_location, robot_size
 
 
-def print_map_to_file():
+def print_map_to_file(grid):
     with open("new_grid.txt", "w+") as grid_file:
         # Use converted_grid
-        global grid
         for row in reversed(grid):
             for cell in row:
                 grid_file.write("1") if cell else grid_file.write("0")
@@ -85,79 +83,14 @@ def print_path_string_to_file(start_point, goal_point, path):
         grid_file.write("Goal point: " + " ".join(str(x) for x in goal_point))
 
 
-def print_path_to_file(start_point, goal_point, path, symbols):
-    """
-    Created path file.
-    :param start_point: starting point, marked as 'S'.
-    :param goal_point: goal point, marked as 'G'.
-    :param path: correct path.
-    :param symbols: Symbols that marks the path direction.
-    :return: null
-    """
-    lines = []
-
-    global grid
-    # Create string lines for each line in converted grid
-    for row in reversed(grid):
-        line = ''
-        for cell in row:
-            if cell:
-                line += '1'
-            else:
-                line += '0'
-        line += '\n'
-        lines.append(line)
-    # Update start point cell to be 'S'
-    x_start_point, y_start_point = start_point
-    line = list(lines[y_start_point])
-    line[x_start_point] = 'S'
-    lines[y_start_point] = "".join(line)
-
-    # Update goal point cell to be 'G'
-    x_goal_point, y_goal_point = goal_point
-    line = list(lines[y_goal_point])
-    line[x_goal_point] = 'G'
-    lines[y_goal_point] = "".join(line)
-    # Remove first symbol(we have one extra symbol)
-    symbols.pop(0)
-    # For each move, put on map it's relative symbol
-    for move, symbol in zip(path, symbols):
-        x_current, y_current = move
-        line = list(lines[y_current])
-        line[x_current] = symbol
-        lines[y_current] = "".join(line)
-    # Write to file
-    with open("path.txt", "w+") as grid_file:
-        for line in lines:
-            grid_file.write(line)
-
-
-def convert_old_grid_point(size, point):
-    """
-    Calculates new point in new grid.
-    :param size: new robot size
-    :param point: point to convert
-    :return: converted point
-    """
-    global grid
+def update_grid_location(response, robot_size, point):
     x, y = point
-    number_of_rows = len(grid)
-    # Assume that origin point is left down place
-    new_point_x = int(math.ceil(abs((response.map.info.origin.position.x - x) / size))) - 1
-    new_point_y = int(math.ceil(abs(((response.map.info.origin.position.y - y) / size)))) - 1
-
-    return [new_point_x, new_point_y]
+    new_x = int(math.ceil(abs((response.map.info.origin.position.x - x) / robot_size))) - 1
+    new_y = int(math.ceil(abs(((response.map.info.origin.position.y - y) / robot_size)))) - 1
+    return [new_x, new_y]
 
 
 def create_occupancy_grid(my_map, robot_size):
-    """
-    Creates new grid with perspective to new robot size
-    :param my_map: map to use it's info
-    :param size: new robot size
-    :return: null
-    """
-    global grid
-
     # cells for robot
     cell = int(math.ceil(robot_size / my_map.info.resolution))
 
@@ -167,103 +100,26 @@ def create_occupancy_grid(my_map, robot_size):
     # build grid
     grid = [[None] * width for _ in xrange(height)]
 
-    i_old_size = 0
-    j_old_size = 0
+    # go over the old grid and check for every old cell if there is an obstacle in the smaller cells
+    old_height = 0
+    old_width = 0
     for i in xrange(height):
         for j in xrange(width):
-            # Mark by default that there is not obstacle
-            found_obs = False
-            for x in range(i_old_size, i_old_size + cell):
-                if found_obs:
-                    break
-                for y in range(j_old_size, j_old_size + cell):
-                    # Check if there is obstacle
-                    if my_map.data[x * my_map.info.width + y] != 0:
-                        grid[i][j] = True
-                        # Stop the iteration as we already mark this cell
-                        found_obs = True
-                        break
-            # Check if there wasn't any obstacle and mark this cell to False
-            if not found_obs:
+            obstacle = False
+            for k in xrange(old_height, old_height + cell):
+                if not obstacle:
+                    for z in xrange(old_width, old_width + cell):
+                        if my_map.data[k * my_map.info.width + z] != 0:
+                            grid[i][j] = True
+                            obstacle = True
+                            break
+            if not obstacle:
                 grid[i][j] = False
-            j_old_size += cell
-        j_old_size = 0
-        i_old_size += cell
+            old_width += cell
+        old_width = 0
+        old_height += cell
 
-
-def find_closest_empty_place_vertical(start_point, g, direction):
-    """
-    Find closest empty place vertical
-    :param start_point: point to start looking for
-    :param g: grid
-    :param direction: direction to move
-    :return: tuple of new goal point and how it's close to old point
-    """
-    global grid
-    try:
-        x, y = start_point
-        counter = 0
-        while g[y][x]:
-            x += direction
-            counter += 1
-        return [x, y], counter
-    except e:
-        # If there will be exception(out of borders) - return origin point and max int(so it will
-        # be chosen as best point)
-        return start_point, sys.maxint
-
-
-def find_closest_empty_place_horizontal(start_point, g, direction):
-    """
-    Find closest empty place horizontal
-    :param start_point: point to start looking for
-    :param g: grid
-    :param direction: direction to move
-    :return: tuple of new goal point and how it's close to old point
-    """
-    try:
-        x, y = start_point
-        counter = 0
-        while g[y][x]:
-            y += direction
-            counter += 1
-        return [x, y], counter
-    except e:
-        # If there will be exception(out of borders) - return origin point and max int(so it will
-        # be chosen as best point)
-        return start_point, sys.maxint
-
-
-def validate_goal_location(g_location, g):
-    """
-    Validate that goal location is not on obstacle. If it is, find closest place to it
-    :param g_location: goal location
-    :param g: grid
-    :return: Goal location not on an obstacle
-    """
-    x, y = g_location
-    # Check if on obstacle
-    if g[y][x]:
-        rospy.loginfo("Goal point is on an obstacle!!!!, changing goal point...")
-        # Check for all direction and find closest point to mark as goal
-        new_g_right, c_right = find_closest_empty_place_horizontal(g_location, g, 1)
-        new_g_left, c_left = find_closest_empty_place_horizontal(g_location, g, -1)
-
-        new_g_down, c_down = find_closest_empty_place_vertical(g_location, g, 1)
-        new_g_up, c_up = find_closest_empty_place_vertical(g_location, g, -1)
-        # Get smallest delta
-        smallest_delta = min(c_right, c_left, c_down, c_up)
-        # Return corresponding goal position
-        if smallest_delta == c_right:
-            return new_g_right
-        elif smallest_delta == c_left:
-            return new_g_left
-        elif smallest_delta == c_up:
-            return new_g_up
-        elif smallest_delta == c_down:
-            return new_g_down
-    else:
-        return g_location
+    return grid
 
 
 if __name__ == "__main__":
