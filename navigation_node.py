@@ -2,6 +2,7 @@
 
 import math
 import sys
+from operator import itemgetter
 
 import numpy as np
 import rospy
@@ -25,6 +26,10 @@ def main():
         grid = create_occupancy_grid(response.map, robot_size)
         starting_location = update_grid_location(response, robot_size, starting_location)
         goal_location = update_grid_location(response, robot_size, goal_location)
+
+        # if the goal is on obstacle
+        if is_obstacle(grid, goal_location):
+            goal_location = transfer_location(grid, goal_location)
 
         # use flipud for A*
         flipud_grid = np.flipud(grid)
@@ -108,6 +113,49 @@ def create_occupancy_grid(my_map, robot_size):
         old_height += cell
 
     return grid
+
+
+def is_obstacle(grid, location):
+    x, y = location
+    if grid[y][x]:
+        return True
+    return False
+
+
+def transfer_location(grid, location):
+    # calculate the steps from clear location
+    right = calculate_steps(grid, location, "right")
+    left = calculate_steps(grid, location, "left")
+    down = calculate_steps(grid, location, "down")
+    up = calculate_steps(grid, location, "up")
+
+    # return the closest location
+    steps = [up, down, left, right]
+    return min(steps, key=itemgetter(1))[0]
+
+
+def calculate_steps(grid, location, direction):
+    x, y = location
+    steps = 0
+
+    # look for empty spot or out of bound
+    try:
+        while grid[y][x]:
+            if direction == "left":
+                y += -1
+            elif direction == "right":
+                y += 1
+            elif direction == "down":
+                x += 1
+            else:
+                x += -1
+
+            steps += 1
+
+        return [x, y], steps
+    # for out of bound
+    except:
+        return location, sys.maxint
 
 
 if __name__ == "__main__":
