@@ -40,10 +40,6 @@ class PathPlanner:
                 col_diff = abs(j - self.goal_node[1])
                 self.heuristic[i][j] = int(abs(row_diff - col_diff) + min(row_diff, col_diff) * 2)
 
-        # print "Heuristic:"
-        # for i in range(len(self.heuristic)):
-        #     print self.heuristic[i]
-
     def a_star(self, start_cart, goal_cart):
         """
         A* Planner method. Finds a plan from a starting node
@@ -85,17 +81,6 @@ class PathPlanner:
                  [0, 1]]  # go right
         delta_name = ['^ ', '< ', 'v ', '> ']
 
-        # If you wish to use diagonals:
-        # delta = [[-1, 0],  # go up
-        #          [0, -1],  # go left
-        #          [1, 0],  # go down
-        #          [0, 1],  # go right
-        #          [-1, -1],  # upper left
-        #          [1, -1],  # lower left
-        #          [-1, 1],  # upper right
-        #          [1, 1]]  # lower right
-        # delta_name = ['^ ', '< ', 'v ', '> ', 'UL', 'LL', 'UR', 'LR']
-
         # Heavily used from some of the A* Examples by Sebastian Thrun:
 
         closed = [[0 for col in range(len(self.grid[0]))] for row in range(len(self.grid))]
@@ -115,7 +100,6 @@ class PathPlanner:
         found = False  # flag that is set when search is complete
         resign = False  # flag set if we can't find expand
         count = 0
-        symbols = []
         while not found and not resign:
             if len(open) == 0:
                 resign = True
@@ -164,16 +148,11 @@ class PathPlanner:
         while current_x != init[0] or current_y != init[1]:
             previous_x = current_x - delta[delta_tracker[current_x][current_y]][0]
             previous_y = current_y - delta[delta_tracker[current_x][current_y]][1]
-            symbols.append(delta_name[delta_tracker[current_x][current_y]])
             shortest_path[previous_x][previous_y] = delta_name[delta_tracker[current_x][current_y]]
             full_path.append((current_x, current_y))
             current_x = previous_x
             current_y = previous_y
         full_path.reverse()
-        # print "Found the goal in {} iterations.".format(count)
-        # print "full_path: ", full_path[:-1]
-        # for i in range(len(shortest_path)):
-        #    print shortest_path[i]
 
         if self.visual:
             for node in full_path:
@@ -186,7 +165,5 @@ class PathPlanner:
             plt.imshow(viz_map, origin='upper', interpolation='none', clim=COLOR_MAP)
             plt.pause(5)
 
-        symbols = [x.strip(' ') for x in symbols]
-        symbols = list(reversed(symbols))
         full_path = [t[::-1] for t in full_path]
-        return init, full_path[:-1], symbols
+        return full_path[:-1]
